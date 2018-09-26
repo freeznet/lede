@@ -10,6 +10,15 @@ PDNSD_LOCAL_PORT=7453
 CRON_FILE=/etc/crontabs/root
 CONFIG=brook
 
+if [ -x "/usr/sbin/ip" ];then
+    IP="/usr/sbin/ip"
+elif [ -x "/sbin/ip" ];then
+    IP="/sbin/ip"
+elif [ -x "/usr/bin/ip" ];then
+    IP="/usr/bin/ip"
+else
+    IP="/bin/ip"
+fi
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -87,18 +96,15 @@ start()
 	# -----------------------------------------------------------------
 	mkdir -p /var/etc/dnsmasq-go.d
 	###### Anti-pollution configuration ######
-	if [ -n "$vt_safe_dns" ]; then
-		if [ "$vt_safe_dns_tcp" = 1 ]; then
-			start_pdnsd "$vt_safe_dns"
-			awk -vs="127.0.0.1#$PDNSD_LOCAL_PORT" '!/^$/&&!/^#/{printf("server=/%s/%s\n",$0,s)}' \
-				/etc/gfwlist/$vt_gfwlist > /var/etc/dnsmasq-go.d/01-pollution.conf
-		else
-			awk -vs="$vt_safe_dns#$vt_safe_dns_port" '!/^$/&&!/^#/{printf("server=/%s/%s\n",$0,s)}' \
-				/etc/gfwlist/$vt_gfwlist > /var/etc/dnsmasq-go.d/01-pollution.conf
-		fi
-	else
-		echo "WARNING: Not using secure DNS, DNS resolution might be polluted if you are in China."
-	fi
+	if [ "$vt_safe_dns_tcp" == "1" ]; then
+        start_pdnsd "$vt_safe_dns"
+        awk -vs="127.0.0.1#$PDNSD_LOCAL_PORT" '!/^$/&&!/^#/{printf("server=/%s/%s\n",$0,s)}' \
+            /etc/gfwlist/$vt_gfwlist > /var/etc/dnsmasq-go.d/01-pollution.conf
+    else
+        echo "WARNING: Not using TCP protocol to access DNS, DNS resolution might be polluted if you are in China."
+        awk -vs="$vt_safe_dns#$vt_safe_dns_port" '!/^$/&&!/^#/{printf("server=/%s/%s\n",$0,s)}' \
+            /etc/gfwlist/$vt_gfwlist > /var/etc/dnsmasq-go.d/01-pollution.conf
+    fi
 
 	###### dnsmasq-to-ipset configuration ######
 	case "$vt_proxy_mode" in
@@ -177,43 +183,65 @@ start_pdnsd()
 {
 	local safe_dns="$1"
 
-	local tcp_dns_list="208.67.222.222, 208.67.220.220"
-	[ -n "$safe_dns" ] && tcp_dns_list="$safe_dns,$tcp_dns_list"
+	local tcp_dns_list="202.141.162.123, 202.141.178.13, 202.38.93.153, 202.38.93.94"
+	# [ -n "$safe_dns" ] && tcp_dns_list="$safe_dns,$tcp_dns_list"
 
 	#killall -9 pdnsd 2>/dev/null && sleep 1
-	kill -9 $(cat /var/run/pdnsd.pid) >/dev/null 2>&1 
+# 	kill -9 $(cat /var/run/pdnsd.pid) >/dev/null 2>&1 
 	
-	mkdir -p /var/etc /var/pdnsd
-	if ! test -f "/var/pdnsd/pdnsd.cache"; then
-    dd if=/dev/zero of="/var/pdnsd/pdnsd.cache" bs=1 count=4 2> /dev/null
-    chown -R nobody.nogroup /var/pdnsd
-  fi
-	
-	cat > /var/etc/pdnsd.conf <<EOF
+# 	mkdir -p /var/etc /var/pdnsd
+# 	if ! test -f "/var/pdnsd/pdnsd.cache"; then
+#     dd if=/dev/zero of="/var/pdnsd/pdnsd.cache" bs=1 count=4 2> /dev/null
+#     chown -R nobody.nogroup /var/pdnsd
+#   fi
+	local min_cache_size=512
+    local ex_cache_size=$(du -k /var/pdnsd/pdnsd.cache 2>/dev/null | awk '{print $1}')
+    [ -z "$ex_cache_size" ] && ex_cache_size=0
+
+    # max cache size set to 1/8 of avaiable disk size
+    local max_cache_size=$(df -k /var | awk '$4~/^[0-9]+$/ {print int($4/8)}')
+
+    local cache_size
+    let cache_size=max_cache_size+ex_cache_size
+    [ $cache_size -lt $min_cache_size ] && cache_size=$min_cache_size
+
+    kill $(cat /var/run/pdnsd.pid) >/dev/null 2>&1 || killall -9 pdnsd >/dev/null 2>&1 
+    
+    [ -d /var/etc ] || mkdir -p /var/etc
+
+    if [ ! -d /var/pdnsd ];then
+        mkdir -p /var/pdnsd
+        echo -ne "pd13\000\000\000\000" >/var/pdnsd/pdnsd.cache
+        chown -R nobody:nogroup /var/pdnsd
+    fi
+        
+    cat > /var/etc/pdnsd.conf <<EOF
 global {
-	perm_cache=10240;
-	cache_dir="/var/pdnsd";
-	pid_file = /var/run/pdnsd.pid;
-	run_as="nobody";
-	server_ip = 127.0.0.1;
-	server_port = $PDNSD_LOCAL_PORT;
-	status_ctl = on;
-	query_method = tcp_only;
-	min_ttl=1h;
-	max_ttl=1w;
-	timeout=10;
-	neg_domain_pol=on;
-	proc_limit=2;
-	procq_limit=8;
+    perm_cache = ${cache_size};
+    cache_dir = "/var/pdnsd";
+    pid_file = /var/run/pdnsd.pid;
+    run_as = "nobody";
+    server_ip = 127.0.0.1;
+    server_port = $PDNSD_LOCAL_PORT;
+    status_ctl = on;
+    query_method = tcp_only;
+    min_ttl = 1h;
+    max_ttl = 1w;
+    timeout = 10;
+    neg_domain_pol = on;
+    proc_limit = 40;
+    procq_limit = 60;
 }
+
 server {
-	label= "fwxxx";
-	ip = $tcp_dns_list;
-	port = 53;
-	timeout=6;
-	uptest=none;
-	interval=10m;
-	purge_cache=off;
+    label= "fwxxx";
+    ip = $tcp_dns_list;
+    port = 53;
+    randomize_servers = on;
+    timeout = 10;
+    uptest = none;
+    interval = 10m;
+    purge_cache = off;
 }
 EOF
 
@@ -233,9 +261,11 @@ stop_pdnsd()
 		while iptables -t nat -D OUTPUT -p tcp --dport 53 -j pdnsd_output 2>/dev/null; do :; done
 		iptables -t nat -X pdnsd_output
 	fi
-	killall -9 pdnsd 2>/dev/null
-	rm -rf /var/pdnsd
-	rm -f /var/etc/pdnsd.conf
+	# killall -9 pdnsd 2>/dev/null
+	# rm -rf /var/pdnsd
+	# rm -f /var/etc/pdnsd.conf
+	kill $(cat /var/run/pdnsd.pid) >/dev/null 2>&1 || killall -9 pdnsd >/dev/null 2>&1
+    rm -f /var/etc/pdnsd.conf
 }
 
 add_cron()
@@ -275,7 +305,7 @@ uci_get_by_type() {
 
 add_rule()
 {
-  /usr/bin/ip rule add fwmark 1 lookup 100
+    ${IP} rule add fwmark 1 lookup 100
 	iptables -t mangle -N brook_pre
 	iptables -t mangle -F brook_pre
 	iptables -t mangle -A brook_pre -m set --match-set local dst -j RETURN || {
@@ -301,8 +331,8 @@ add_rule()
 	
 	iptables -N gameboost -t mangle
 	ipset -! create gameuser hash:ip maxelem 65536 2>/dev/null
-	/usr/bin/ip rule add fwmark 0x01/0x01 table 100
-	/usr/bin/ip route add local 0.0.0.0/0 dev lo table 100
+	${IP} rule add fwmark 0x01/0x01 table 100
+	${IP} route add local 0.0.0.0/0 dev lo table 100
 	iptables -t mangle -A gameboost -p udp -m set --match-set local dst -j RETURN
 	iptables -t mangle -A gameboost -p udp -m set --match-set china dst -j RETURN
 	iptables -t mangle -A gameboost -p udp --dport 53 -j RETURN
@@ -366,8 +396,8 @@ del_rule()
 	iptables -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -m set --match-set china-banned dst -j REDIRECT --to $SS_REDIR_PORT 2>/dev/null
 	iptables -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -m set ! --match-set $vt_np_ipset dst -j REDIRECT --to $SS_REDIR_PORT 2>/dev/null
 	
-	/usr/bin/ip rule del fwmark 0x01/0x01 table 100
-	/usr/bin/ip route del local 0.0.0.0/0 dev lo table 100
+	${IP} rule del fwmark 0x01/0x01 table 100
+	${IP} route del local 0.0.0.0/0 dev lo table 100
 	if iptables -t mangle -F gameboost 2>/dev/null; then
 		while iptables -t mangle -D PREROUTING -m set --match-set gameuser src -j gameboost 2>/dev/null; do :; done
 		iptables -t mangle -X gameboost 2>/dev/null
