@@ -4,7 +4,7 @@
 START=30
 
 DNSMASQ_RESTART=N
-DNS_SERVER="114.114.114.114,114.114.115.115"
+DNS_SERVER="202.141.162.123,202.141.178.13,202.38.93.153,202.38.93.94,202.106.195.68"
 
 start_pdnsd() {
   DNS_SERVER=$(uci get sfe.config.dns_server 2>/dev/null)
@@ -102,7 +102,7 @@ server {
 
 server {  
     label = "special";                  # 这个随便写  
-    ip = 208.67.222.222,208.67.220.220; # 这里为备用DNS服务器的 ip 地址  
+    ip = 202.141.162.123,202.141.178.13,202.38.93.153,202.38.93.94,202.106.195.68; # 这里为备用DNS服务器的 ip 地址  
     port = 5353;                        # 推荐使用53以外的端口（DNS服务器必须支持） 
     proxy_only = on;
     timeout = 5;  
