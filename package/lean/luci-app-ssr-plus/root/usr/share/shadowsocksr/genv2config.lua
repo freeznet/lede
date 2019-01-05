@@ -1,4 +1,4 @@
-local ucursor = require "luci.model.uci"
+local ucursor = require "luci.model.uci".cursor()
 local json = require "luci.jsonc"
 local server_section = arg[1]
 local proto = arg[2] 
@@ -8,7 +8,7 @@ local server = ucursor:get_all("shadowsocksr", server_section)
 
 local v2ray = {
   log = {
-    error = "/var/ssrplus.log",
+    -- error = "/var/ssrplus.log",
     loglevel = "warning"
   },
     -- 传入连接
@@ -68,6 +68,13 @@ local v2ray = {
             httpSettings = (server.transport == "h2") and {
                 path = server.h2_path,
                 host = server.h2_host,
+            } or nil,
+            quicSettings = (server.transport == "quic") and {
+                security = server.quic_security,
+                key = server.quic_key,
+                header = {
+                  type = server.quic_guise
+                }
             } or nil
         },
         mux = {
@@ -84,4 +91,4 @@ local v2ray = {
         }
     }
 }
-print(json.stringify(v2ray))
+print(json.stringify(v2ray, 1))
